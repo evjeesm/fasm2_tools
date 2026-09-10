@@ -78,12 +78,12 @@ end macro
 ;; Enclose in angular brackets
 purge DISP_CODE_LINE
 macro DISP_CODE_LINE line*&
- forward
-  irps e, line
-  \{
-   display \`e, ' '
-  \}
+  iterate l, line
+    irps e, line
+      display `e, ' '
+    end irps
   display 10
+  end iterate
 end macro
 
 ;; Assemble line and print.
@@ -93,7 +93,9 @@ macro TRACE line*
   display 'TRACE ',__FILE__,'['
   DISP_LINE_NUM __LINE__
   display ']: '
-  match l, <line> \{ DISP_CODE_LINE l \}
+  match l, <line>
+    DISP_CODE_LINE l
+  end match
   line
 end macro
 
@@ -103,7 +105,9 @@ macro DEBUG_TRACE line*
     display 'TRACE ',__FILE__,'['
     DISP_LINE_NUM __LINE__
     display ']: '
-    match l, <line> \{ DISP_CODE_LINE l \}
+    match l, <line>
+      DISP_CODE_LINE l
+    end match
   END_DEBUG
   line
 end macro
