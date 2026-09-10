@@ -173,7 +173,7 @@ purge VTEXT_BAKE_STACK
 macro VTEXT_BAKE_STACK vsrc*
   local n, d, text_len, _STORE
   text_len = vsrc#.len
-  n = len
+  n = text_len
   d = 4
   while n > 0
     repeat n / d
@@ -444,12 +444,12 @@ end macro
 purge VTEXT_READ_TO_VALUE
 macro VTEXT_READ_TO_VALUE vsrc*, offset*, size*, output*
   local char
-  STATIC_ASSERT vsrc#.len >= size, "vsrc overflow"
+  STATIC_ASSERT size+offset <= vsrc#.len, "vsrc overflow"
   STATIC_ASSERT size <= 8, "Value don't fit in 64 bit variable"
   output = 0
   i = 0
   while i < size
-    VTEXT_LOAD_CHAR vsrc, i, char
+    VTEXT_LOAD_CHAR vsrc, i+offset, char
     output = (char shl (i*8)) or output
     i = i + 1
   end while
