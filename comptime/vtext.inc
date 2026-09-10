@@ -113,6 +113,64 @@ macro VTEXT_RESERVE name*, capacity*
     end if
 end macro
 
+;; Compiled byte-copy kernel used by the VTEXT operations below. Unlike a
+;; preprocessor `while` loop, this loop is compiled once and runs directly on
+;; virtual-output offsets.
+calminstruction vtext.copy_bytes? dest*, dest_offset*, src*, src_offset*, size*
+  local i, byte
+  compute i, 0
+loop:
+  check i < size
+  jno done
+  load byte, src:src_offset + i, 1
+  store dest:dest_offset + i, 1, byte
+  compute i, i + 1
+  jump loop
+done:
+end calminstruction
+
+calminstruction vtext.xor_bytes? src*, offset*, size*, key*
+  local i, byte
+  compute i, 0
+loop:
+  check i < size
+  jno done
+  load byte, src:offset + i, 1
+  store src:offset + i, 1, byte xor key
+  compute i, i + 1
+  jump loop
+done:
+end calminstruction
+
+calminstruction vtext.display_bytes? src*, offset*, size*
+  local i, byte
+  compute i, 0
+loop:
+  check i < size
+  jno done
+  load byte, src:offset + i, 1
+  display byte
+  compute i, i + 1
+  jump loop
+done:
+end calminstruction
+
+calminstruction vtext.display_hex_bytes? src*, offset*, size*
+  local i, byte, high, low
+  compute i, 0
+loop:
+  check i < size
+  jno done
+  load byte, src:offset + i, 1
+  compute high, 0FFh and '0123456789ABCDEF' shr ((byte shr 4) * 8)
+  compute low, 0FFh and '0123456789ABCDEF' shr ((byte and 0Fh) * 8)
+  display high
+  display low
+  compute i, i + 1
+  jump loop
+done:
+end calminstruction
+
 ;; Generic bake that takes user baking strategy.
 ;; Param BAKE_CHUNK - is a macro of form:
 ;;   `BAKE_CHUNK dest, vsrc, size, offset`
@@ -208,15 +266,9 @@ end macro
 
 purge VTEXT_SLICE
 macro VTEXT_SLICE vsrc*, start_offset:*, end_offset*
-  local i, b
-  i = 0
   STATIC_ASSERT start_offset < end_offset, "slice bounds should come in asc order!"
   STATIC_ASSERT end_offset <= vsrc#.len, "vsrc overflow!"
-  while start_offset + i < end_offset
-    load b byte from vsrc:start_offset+i
-    store byte b at vsrc:i
-    i = i + 1
-  end while
+  vtext.copy_bytes vsrc, 0, vsrc, start_offset, end_offset - start_offset
 end macro
 
 purge VTEXT_SET
@@ -276,86 +328,43 @@ end macro
 
 purge VTEXT_COPY
 macro VTEXT_COPY vdest*, vsrc*
-  local i,b
   VTEXT_RESERVE vdest, vsrc#.len
-  i = 0
-  while i < vsrc#.len
-    load b byte from vsrc:i
-    store byte b at vdest:i
-    i = i + 1
-  end while
+  vtext.copy_bytes vdest, 0, vsrc, 0, vsrc#.len
   vdest#.len = vsrc#.len
 end macro
 
 purge VTEXT_COPY_RANGE
 macro VTEXT_COPY_RANGE vdest*, vdest_offset*, vsrc*, vsrc_offset*, size*
-  local i,b
   STATIC_ASSERT vsrc_offset + size <= vsrc#.len, "Out of vsrc bounds"
   VTEXT_RESERVE vdest, vdest_offset + size
-  i = 0
-  while i < size
-    load b byte from vsrc:vsrc_offset+i
-    store byte b at vdest:vdest_offset+i
-    i = i + 1
-  end while
+  vtext.copy_bytes vdest, vdest_offset, vsrc, vsrc_offset, size
 end macro
 
 purge VTEXT_WRITE
 macro VTEXT_WRITE vdest*, vdest_offset*, vsrc*
-  local i,b
   VTEXT_RESERVE vdest, vdest_offset + vsrc#.len
-  i = 0
-  while i < vsrc#.len
-    load b byte from vsrc:i
-    store byte b at vdest:vdest_offset+i
-    i = i + 1
-  end while
+  vtext.copy_bytes vdest, vdest_offset, vsrc, 0, vsrc#.len
 end macro
 
 purge VTEXT_READ
 macro VTEXT_READ vdest*, vsrc*, vsrc_offset*, size*
-  local i,b
   STATIC_ASSERT vsrc_offset + size <= vsrc#.len, "Out of vsrc bounds"
   VTEXT_RESERVE vdest, size
-  i = 0
-  while i < size
-    load b byte from vsrc:vsrc_offset+i
-    store byte b at vdest:i
-    i = i + 1
-  end while
+  vtext.copy_bytes vdest, 0, vsrc, vsrc_offset, size
   vdest#.len = size
 end macro
 
 purge VTEXT_DISPLAY
 macro VTEXT_DISPLAY vsrc*, offset:0, until:?
-  local _PRINT, _until
-  purge _PRINT
-  macro _PRINT dest, src, _size, _offset
-    local chunk,i
-    if _size = 8
-      load chunk qword from src:_offset
-    else if _size = 4
-      load chunk dword from src:_offset
-    else if _size = 2
-      load chunk word from src:_offset
-    else if _size = 1
-      load chunk byte from src:_offset
-    end if
-    STATIC_ASSERT _size <> 0, "Chunk size should never be zero!"
-    i = 0
-    while i < _size
-      display (chunk shr (8*i)) and 0xFF
-      i = i + 1
-    end while
-  end macro
+  local _until
   match ?, until
     _until = vsrc#.len
   else
     _until = until
   end match
 
-  VTEXT_BAKE _, vsrc, _PRINT, _until, offset
-  purge _PRINT
+  STATIC_ASSERT offset <= _until, "VTEXT display range is invalid!"
+  vtext.display_bytes vsrc, offset, _until - offset
 end macro
 
 purge VTEXT_DISPLAY_NULLTERM
@@ -374,37 +383,7 @@ end macro
 
 purge VTEXT_HEX
 macro VTEXT_HEX vsrc*, offset:0, until:?
-  local _PRINT, _HEX, _until
-  purge _PRINT
-  macro _PRINT dest, src, _size, _offset
-    local chunk
-    load chunk byte from src:_offset
-    if chunk < 16
-      display '0'
-    end if
-    _HEX chunk
-  end macro
-  purge _HEX
-  macro _HEX num*
-   local n,nib,i,shft,d
-   n = (num) and 0xffff_ffff_ffff_ffff
-   if n <> 0
-     bit = bsr n
-   else
-     bit = 0
-   end if
-   nib = bit/4
-   i = nib + 1
-   while i <> 0
-     shft = (i-1)*4
-     d = '0' + (n and (0xF shl shft)) shr shft
-     i = i-1
-     if d > '9'
-       d = d+'A'-'9'-1
-     end if
-     display d
-   end while
-  end macro
+  local _until
 
   match ?, until
     _until = vsrc#.len
@@ -412,9 +391,8 @@ macro VTEXT_HEX vsrc*, offset:0, until:?
     _until = until
   end match
 
-  VTEXT_BAKE _, vsrc, _PRINT, _until, offset, 1
-  purge _PRINT
-  purge _HEX
+  STATIC_ASSERT offset <= _until, "VTEXT hex range is invalid!"
+  vtext.display_hex_bytes vsrc, offset, _until - offset
 end macro
 
 purge VTEXT_LOAD_CHAR
@@ -508,11 +486,7 @@ end macro
 
 purge VTEXT_XOR
 macro VTEXT_XOR vsrc*, key*
-  local b
-  repeat vsrc#.len
-    load b byte from vsrc:%-1
-    store byte b xor key at vsrc:%-1
-  end repeat
+  vtext.xor_bytes vsrc, 0, vsrc#.len, key
 end macro
 
 purge ASSEMBLE
